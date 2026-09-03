@@ -48,7 +48,6 @@ jobs:
       PUBLISH: ${{ inputs.publish }}
       PLATECH_MAVEN_USER: ${{ secrets.PLATECH_PACKAGES_USER }}
       PLATECH_MAVEN_TOKEN: ${{ secrets.PLATECH_PACKAGES_TOKEN }}
-      PLATECH_EXAMPLE_API_KEY: ${{ secrets.PLATECH_EXAMPLE_API_KEY }}
       PLATECH_EXAMPLE_STORE_PASSWORD: ${{ secrets.SANDBOX_EXAMPLE_STORE_PASSWORD }}
       PLATECH_EXAMPLE_KEY_ALIAS: ${{ secrets.SANDBOX_EXAMPLE_KEY_ALIAS }}
       PLATECH_EXAMPLE_KEY_PASSWORD: ${{ secrets.SANDBOX_EXAMPLE_KEY_PASSWORD }}
@@ -108,9 +107,6 @@ jobs:
           test -n "$PRIVATE_REPOSITORY_TOKEN"
           test -n "$PLATECH_MAVEN_USER"
           test -n "$PLATECH_MAVEN_TOKEN"
-          if [[ "$PUBLISH" == 'true' && "$TAP_ENVIRONMENT" == 'sandbox' ]]; then
-            test -n "$PLATECH_EXAMPLE_API_KEY"
-          fi
 
       - name: Checkout private wrapper
         uses: actions/checkout@v4
@@ -257,20 +253,6 @@ jobs:
           chmod 600 "$key_path"
           echo "PLATECH_EXAMPLE_STORE_FILE=$key_path" >> "$GITHUB_ENV"
 
-      - name: Inject demo key in React Native sandbox build only
-        if: inputs.platform == 'react-native' && inputs.environment == 'sandbox' && inputs.publish
-        working-directory: wrapper
-        shell: bash
-        run: |
-          set -euo pipefail
-          node <<'NODE'
-          const fs = require('fs');
-          const path = 'example/App.tsx';
-          const source = fs.readFileSync(path, 'utf8');
-          if (!source.includes('SUA_API_KEY_AQUI')) throw new Error('Placeholder da API key não encontrado.');
-          fs.writeFileSync(path, source.replace('SUA_API_KEY_AQUI', process.env.PLATECH_EXAMPLE_API_KEY));
-          NODE
-
       - name: Build Flutter example
         if: inputs.platform == 'flutter'
         working-directory: wrapper/example
@@ -278,11 +260,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$TAP_ENVIRONMENT" == 'sandbox' ]]; then
-            if [[ "$PUBLISH" == 'true' ]]; then
-              flutter build apk --release --dart-define="PLATECH_API_KEY=${PLATECH_EXAMPLE_API_KEY}"
-            else
-              flutter build apk --release
-            fi
+            flutter build apk --release
           else
             flutter build apk --debug
           fi
@@ -318,6 +296,15 @@ jobs:
               apk='wrapper/example/android/app/build/outputs/apk/release/app-release.apk'
             fi
             test -f "$apk"
+
+            apk_audit_dir="$RUNNER_TEMP/apk-audit"
+            rm -rf "$apk_audit_dir"
+            unzip -q "$apk" -d "$apk_audit_dir"
+            if grep -RaqE 'pla_(prod|sandbox|sand)_[A-Za-z0-9]+' "$apk_audit_dir"; then
+              echo 'O APK contém uma API key Platech incorporada.' >&2
+              exit 1
+            fi
+
             cp "$apk" "dist/assets/${asset_base}-example.apk"
           fi
 
