@@ -18,9 +18,8 @@ on:
         required: true
         type: string
       wrapper_ref:
-        description: Private wrapper branch, tag or commit
+        description: Full 40-character commit SHA from the private wrapper
         required: true
-        default: main
         type: string
       publish:
         description: Create the immutable public tag and GitHub Release
