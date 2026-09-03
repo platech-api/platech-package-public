@@ -1,0 +1,382 @@
+name: Publish public wrapper and example
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Wrapper platform
+        required: true
+        type: choice
+        options: [flutter, react-native]
+      environment:
+        description: TapToPay environment
+        required: true
+        type: choice
+        options: [sandbox, release]
+      version:
+        description: Immutable SemVer, without v
+        required: true
+        type: string
+      wrapper_ref:
+        description: Private wrapper branch, tag or commit
+        required: true
+        default: main
+        type: string
+      publish:
+        description: Create the immutable public tag and GitHub Release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: distribution-${{ inputs.platform }}-${{ inputs.environment }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      artifact: ${{ steps.metadata.outputs.artifact }}
+      tag: ${{ steps.metadata.outputs.tag }}
+      title: ${{ steps.metadata.outputs.title }}
+    env:
+      VERSION: ${{ inputs.version }}
+      TAP_ENVIRONMENT: ${{ inputs.environment }}
+      PUBLISH: ${{ inputs.publish }}
+      PLATECH_MAVEN_USER: ${{ secrets.PLATECH_PACKAGES_USER }}
+      PLATECH_MAVEN_TOKEN: ${{ secrets.PLATECH_PACKAGES_TOKEN }}
+      PLATECH_EXAMPLE_API_KEY: ${{ secrets.PLATECH_EXAMPLE_API_KEY }}
+      PLATECH_EXAMPLE_STORE_PASSWORD: ${{ secrets.SANDBOX_EXAMPLE_STORE_PASSWORD }}
+      PLATECH_EXAMPLE_KEY_ALIAS: ${{ secrets.SANDBOX_EXAMPLE_KEY_ALIAS }}
+      PLATECH_EXAMPLE_KEY_PASSWORD: ${{ secrets.SANDBOX_EXAMPLE_KEY_PASSWORD }}
+    steps:
+      - name: Resolve immutable distribution metadata
+        id: metadata
+        shell: bash
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          TAP_ENVIRONMENT: ${{ inputs.environment }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          [[ "${VERSION^^}" != *SNAPSHOT* ]]
+
+          case "${PLATFORM}-${TAP_ENVIRONMENT}" in
+            flutter-sandbox)
+              repository='platech-api/platech-tap-to-pay-flutter-sandbox'
+              package_name='platech_tap_to_pay'
+              tag="flutter-sandbox-v${VERSION}"
+              title="Platech TapToPay Flutter Sandbox - ${VERSION}"
+              ;;
+            flutter-release)
+              repository='platech-api/platech-tap-to-pay-flutter-release'
+              package_name='platech_tap_to_pay_release'
+              tag="flutter-release-v${VERSION}"
+              title="Platech TapToPay Flutter Release - ${VERSION}"
+              ;;
+            react-native-sandbox)
+              repository='platech-api/platech-tap-to-pay-react-native-sandbox'
+              package_name='@platech/react-native-tap-to-pay-sandbox'
+              tag="react-native-sandbox-v${VERSION}"
+              title="Platech TapToPay React Native Sandbox - ${VERSION}"
+              ;;
+            react-native-release)
+              repository='platech-api/platech-tap-to-pay-react-native-release'
+              package_name='@platech/react-native-tap-to-pay-release'
+              tag="react-native-release-v${VERSION}"
+              title="Platech TapToPay React Native Release - ${VERSION}"
+              ;;
+            *) exit 1 ;;
+          esac
+
+          echo "repository=$repository" >> "$GITHUB_OUTPUT"
+          echo "package_name=$package_name" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+          echo "artifact=${PLATFORM}-${TAP_ENVIRONMENT}-${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Check required credentials
+        shell: bash
+        env:
+          PRIVATE_REPOSITORY_TOKEN: ${{ secrets.PLATECH_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRIVATE_REPOSITORY_TOKEN"
+          test -n "$PLATECH_MAVEN_USER"
+          test -n "$PLATECH_MAVEN_TOKEN"
+          if [[ "$PUBLISH" == 'true' && "$TAP_ENVIRONMENT" == 'sandbox' ]]; then
+            test -n "$PLATECH_EXAMPLE_API_KEY"
+          fi
+
+      - name: Checkout private wrapper
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.metadata.outputs.repository }}
+          ref: ${{ inputs.wrapper_ref }}
+          token: ${{ secrets.PLATECH_RELEASE_TOKEN }}
+          path: wrapper
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        if: inputs.platform == 'flutter'
+        with:
+          channel: stable
+          cache: true
+
+      - uses: actions/setup-node@v4
+        if: inputs.platform == 'react-native'
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            wrapper/package-lock.json
+            wrapper/example/package-lock.json
+
+      - name: Reject credentials and unexpected native source
+        working-directory: wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -nE 'gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}'; then
+            echo 'Credencial potencial encontrada no wrapper ou exemplo.' >&2
+            exit 1
+          fi
+          test -z "$(find android/src/main -type f \( -name '*.kt' -o -path '*/res/*' \) -print)"
+
+      - name: Validate Flutter wrapper
+        if: inputs.platform == 'flutter'
+        working-directory: wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          wrapper_version="$(sed -nE 's/^version:[[:space:]]*([^+[:space:]]+).*/\1/p' pubspec.yaml)"
+          test "$wrapper_version" = "$VERSION"
+          grep -q ":${VERSION}" android/build.gradle
+          flutter pub get
+          dart format --output=none --set-exit-if-changed lib test example/lib
+          flutter analyze --no-pub
+          flutter test --no-pub
+          cd example
+          flutter pub get
+          flutter analyze --no-pub
+
+      - name: Validate and compile React Native wrapper
+        if: inputs.platform == 'react-native'
+        working-directory: wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          wrapper_version="$(node -p "require('./package.json').version")"
+          test "$wrapper_version" = "$VERSION"
+          grep -q ":${VERSION}" android/build.gradle
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+          npm pack --dry-run
+          cd example
+          npm ci
+          npx tsc --noEmit
+
+      - name: Prepare public package and example source
+        shell: bash
+        env:
+          PACKAGE_NAME: ${{ steps.metadata.outputs.package_name }}
+          PLATFORM: ${{ inputs.platform }}
+          TAG: ${{ steps.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/package dist/example dist/assets
+
+          if [[ "$PLATFORM" == 'flutter' ]]; then
+            git -C wrapper archive --format=tar HEAD \
+              pubspec.yaml README.md CHANGELOG.md LICENSE analysis_options.yaml android lib \
+              | tar -xf - -C dist/package
+            git -C wrapper archive --format=tar HEAD:example | tar -xf - -C dist/example
+            rm -f dist/example/pubspec.lock
+            sed -i \
+              "s|    path: \.\.|    git:\n      url: https://github.com/platech-api/platech-package-public.git\n      ref: ${TAG}|" \
+              dist/example/pubspec.yaml
+            grep -q 'platech-package-public.git' dist/example/pubspec.yaml
+          else
+            git -C wrapper archive --format=tar HEAD \
+              package.json README.md react-native.config.js android \
+              | tar -xf - -C dist/package
+            cp -R wrapper/lib dist/package/lib
+            git -C wrapper archive --format=tar HEAD:example | tar -xf - -C dist/example
+            rm -f dist/example/package-lock.json
+
+            PACKAGE_NAME="$PACKAGE_NAME" TAG="$TAG" node <<'NODE'
+          const fs = require('fs');
+          const publicUrl = 'https://github.com/platech-api/platech-package-public.git';
+          const packagePath = 'dist/package/package.json';
+          const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+          delete packageJson.scripts;
+          delete packageJson.devDependencies;
+          delete packageJson['react-native-builder-bob'];
+          delete packageJson.publishConfig;
+          delete packageJson.files;
+          packageJson.repository = {type: 'git', url: publicUrl};
+          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+
+          const examplePath = 'dist/example/package.json';
+          const exampleJson = JSON.parse(fs.readFileSync(examplePath, 'utf8'));
+          exampleJson.dependencies[process.env.PACKAGE_NAME] =
+            `git+${publicUrl}#${process.env.TAG}`;
+          fs.writeFileSync(examplePath, `${JSON.stringify(exampleJson, null, 2)}\n`);
+          NODE
+          fi
+
+          find dist -name '.DS_Store' -delete
+          test ! -e dist/package/example
+          test ! -e dist/package/test
+          test ! -e dist/package/.github
+          test ! -e dist/package/src
+
+      - name: Prepare stable sandbox signing key
+        if: inputs.environment == 'sandbox' && inputs.publish
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SANDBOX_EXAMPLE_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_BASE64"
+          test -n "$PLATECH_EXAMPLE_STORE_PASSWORD"
+          test -n "$PLATECH_EXAMPLE_KEY_ALIAS"
+          test -n "$PLATECH_EXAMPLE_KEY_PASSWORD"
+          key_path="$RUNNER_TEMP/platech-sandbox-example.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$key_path"
+          chmod 600 "$key_path"
+          echo "PLATECH_EXAMPLE_STORE_FILE=$key_path" >> "$GITHUB_ENV"
+
+      - name: Inject demo key in React Native sandbox build only
+        if: inputs.platform == 'react-native' && inputs.environment == 'sandbox' && inputs.publish
+        working-directory: wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'example/App.tsx';
+          const source = fs.readFileSync(path, 'utf8');
+          if (!source.includes('SUA_API_KEY_AQUI')) throw new Error('Placeholder da API key não encontrado.');
+          fs.writeFileSync(path, source.replace('SUA_API_KEY_AQUI', process.env.PLATECH_EXAMPLE_API_KEY));
+          NODE
+
+      - name: Build Flutter example
+        if: inputs.platform == 'flutter'
+        working-directory: wrapper/example
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$TAP_ENVIRONMENT" == 'sandbox' ]]; then
+            if [[ "$PUBLISH" == 'true' ]]; then
+              flutter build apk --release --dart-define="PLATECH_API_KEY=${PLATECH_EXAMPLE_API_KEY}"
+            else
+              flutter build apk --release
+            fi
+          else
+            flutter build apk --debug
+          fi
+
+      - name: Build React Native example
+        if: inputs.platform == 'react-native'
+        working-directory: wrapper/example/android
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          if [[ "$TAP_ENVIRONMENT" == 'sandbox' ]]; then
+            ./gradlew assembleRelease --no-daemon
+          else
+            ./gradlew assembleDebug --no-daemon
+          fi
+
+      - name: Assemble release assets
+        shell: bash
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          TAP_ENVIRONMENT: ${{ inputs.environment }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          asset_base="platech-tap-to-pay-${PLATFORM}-${TAP_ENVIRONMENT}-v${VERSION}"
+          (cd dist/example && zip -qr "../assets/${asset_base}-example.zip" .)
+
+          if [[ "$TAP_ENVIRONMENT" == 'sandbox' ]]; then
+            if [[ "$PLATFORM" == 'flutter' ]]; then
+              apk='wrapper/example/build/app/outputs/flutter-apk/app-release.apk'
+            else
+              apk='wrapper/example/android/app/build/outputs/apk/release/app-release.apk'
+            fi
+            test -f "$apk"
+            cp "$apk" "dist/assets/${asset_base}-example.apk"
+          fi
+
+          (cd dist/assets && sha256sum ./* > SHA256SUMS.txt)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.metadata.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 30
+          path: dist
+
+  publish:
+    if: inputs.publish
+    needs: build
+    runs-on: ubuntu-latest
+    environment: public-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: dist
+
+      - name: Checkout documentation branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          path: central
+
+      - name: Create package-only tag and file-only release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+          TITLE: ${{ needs.build.outputs.title }}
+        run: |
+          set -euo pipefail
+          if git -C central ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "A tag imutável ${TAG} já existe." >&2
+            exit 1
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "O GitHub Release ${TAG} já existe." >&2
+            exit 1
+          fi
+
+          git -C central config user.name 'platech-release-bot'
+          git -C central config user.email 'release-bot@platech.site'
+          git -C central checkout --orphan "distribution-${GITHUB_RUN_ID}"
+          git -C central rm -rf .
+          cp -R dist/package/. central/
+          git -C central add -A
+          git -C central commit -m "dist: ${TAG}"
+          git -C central push origin "HEAD:refs/tags/${TAG}"
+
+          gh release create "$TAG" dist/assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$TITLE" \
+            --notes ''

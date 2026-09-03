@@ -1,0 +1,44 @@
+name: Validate public distribution repository
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate documented packages and platforms
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'platech-taptopay-flutter-sandbox' README.md
+          grep -q 'platech-taptopay-flutter-release' README.md
+          grep -q 'platech-taptopay-react-native-sandbox' README.md
+          grep -q 'platech-taptopay-react-native-release' README.md
+          test "$(grep -c 'github.com/platech-api/platech-package-public.git' README.md)" -eq 4
+          ! grep -q 'platech-tap-to-pay-flutter-sandbox.git' README.md
+          ! grep -q 'platech-tap-to-pay-flutter-release.git' README.md
+          ! grep -q 'platech-tap-to-pay-react-native-sandbox.git' README.md
+          ! grep -q 'platech-tap-to-pay-react-native-release.git' README.md
+          test ! -d plugins
+          ! grep -E -i '\bios\b|cocoapods|swift package' README.md
+
+      - name: Reject committed credentials
+        shell: bash
+        run: |
+          if git grep -nE 'gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}'; then
+            echo 'Credencial potencial encontrada no repositório público.' >&2
+            exit 1
+          fi
