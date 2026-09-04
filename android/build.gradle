@@ -1,0 +1,90 @@
+group = 'site.platech.taptopay.flutter'
+version = '1.0.1'
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.11.1'
+    }
+}
+
+apply plugin: 'com.android.library'
+
+def propertyOrEnvironment = { String propertyName, String environmentName ->
+    findProperty(propertyName) ?: System.getenv(environmentName)
+}
+
+def platechMavenUser = propertyOrEnvironment('platechMavenUser', 'PLATECH_MAVEN_USER')
+def platechMavenToken = propertyOrEnvironment('platechMavenToken', 'PLATECH_MAVEN_TOKEN')
+
+repositories {
+    google()
+    mavenCentral()
+    if (findProperty('platechUseMavenLocal') == 'true') {
+        mavenLocal()
+    }
+    maven {
+        url = uri(propertyOrEnvironment('platechMavenUrl', 'PLATECH_MAVEN_URL') ?:
+            'https://maven.pkg.github.com/platech-api/platech-package-public')
+        credentials {
+            username = platechMavenUser
+            password = platechMavenToken
+        }
+    }
+    maven {
+        url = uri(propertyOrEnvironment('zoopMavenUrl', 'ZOOP_MAVEN_URL') ?:
+            'https://maven.pkg.github.com/getzoop/zoop-package-public')
+        credentials {
+            username = platechMavenUser
+            password = platechMavenToken
+        }
+    }
+}
+
+rootProject.allprojects {
+    repositories {
+        if (findProperty('platechUseMavenLocal') == 'true') {
+            mavenLocal()
+        }
+        maven {
+            url = uri(propertyOrEnvironment('platechMavenUrl', 'PLATECH_MAVEN_URL') ?:
+                'https://maven.pkg.github.com/platech-api/platech-package-public')
+            credentials {
+                username = platechMavenUser
+                password = platechMavenToken
+            }
+        }
+        maven {
+            url = uri(propertyOrEnvironment('zoopMavenUrl', 'ZOOP_MAVEN_URL') ?:
+                'https://maven.pkg.github.com/getzoop/zoop-package-public')
+            credentials {
+                username = platechMavenUser
+                password = platechMavenToken
+            }
+        }
+    }
+}
+
+android {
+    namespace 'site.platech.taptopay.flutter'
+    compileSdk 35
+
+    defaultConfig {
+        minSdk 28
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    api('site.platech.sdk:platech-taptopay-flutter-release:1.0.2') {
+        exclude group: 'com.google.ai.edge.litert', module: 'litert-support'
+    }
+}
