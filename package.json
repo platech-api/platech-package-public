@@ -1,0 +1,25 @@
+{
+  "name": "@platech/react-native-tap-to-pay-sandbox",
+  "version": "1.0.3",
+  "description": "Bridge React Native Android para abrir o fluxo nativo Platech TapToPay.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/platech-api/platech-package-public.git"
+  },
+  "main": "./lib/module/index.js",
+  "types": "./lib/typescript/src/index.d.ts",
+  "react-native": "./lib/module/index.js",
+  "exports": {
+    ".": {
+      "types": "./lib/typescript/src/index.d.ts",
+      "react-native": "./lib/module/index.js",
+      "default": "./lib/module/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "react": ">=19.1.0",
+    "react-native": ">=0.81.0"
+  },
+  "license": "UNLICENSED"
+}
