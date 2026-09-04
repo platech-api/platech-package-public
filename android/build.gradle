@@ -1,0 +1,92 @@
+apply plugin: 'com.android.library'
+
+group = 'site.platech.taptopay.reactnative.wrapper'
+version = '1.0.1'
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.11.1'
+    }
+}
+
+def propertyOrEnvironment = { String propertyName, String environmentName ->
+    findProperty(propertyName) ?: System.getenv(environmentName)
+}
+
+def platechMavenUser = propertyOrEnvironment('platechMavenUser', 'PLATECH_MAVEN_USER')
+def platechMavenToken = propertyOrEnvironment('platechMavenToken', 'PLATECH_MAVEN_TOKEN')
+
+repositories {
+    google()
+    mavenCentral()
+    if (findProperty('platechUseMavenLocal') == 'true') {
+        mavenLocal()
+    }
+    maven {
+        url = uri(propertyOrEnvironment('platechMavenUrl', 'PLATECH_MAVEN_URL') ?:
+            'https://maven.pkg.github.com/platech-api/platech-package-public')
+        credentials {
+            username = platechMavenUser
+            password = platechMavenToken
+        }
+    }
+    maven {
+        url = uri(propertyOrEnvironment('zoopMavenUrl', 'ZOOP_MAVEN_URL') ?:
+            'https://maven.pkg.github.com/getzoop/zoop-package-public')
+        credentials {
+            username = platechMavenUser
+            password = platechMavenToken
+        }
+    }
+}
+
+rootProject.allprojects {
+    repositories {
+        if (findProperty('platechUseMavenLocal') == 'true') {
+            mavenLocal()
+        }
+        maven {
+            url = uri(propertyOrEnvironment('platechMavenUrl', 'PLATECH_MAVEN_URL') ?:
+                'https://maven.pkg.github.com/platech-api/platech-package-public')
+            credentials {
+                username = platechMavenUser
+                password = platechMavenToken
+            }
+        }
+        maven {
+            url = uri(propertyOrEnvironment('zoopMavenUrl', 'ZOOP_MAVEN_URL') ?:
+                'https://maven.pkg.github.com/getzoop/zoop-package-public')
+            credentials {
+                username = platechMavenUser
+                password = platechMavenToken
+            }
+        }
+    }
+}
+
+android {
+    namespace 'site.platech.taptopay.reactnative.wrapper'
+    compileSdkVersion(findProperty('android.compileSdkVersion')?.toInteger() ?: 36)
+
+    defaultConfig {
+        minSdkVersion(findProperty('android.minSdkVersion')?.toInteger() ?: 28)
+        targetSdkVersion(findProperty('android.targetSdkVersion')?.toInteger() ?: 36)
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'com.facebook.react:react-android'
+    api('site.platech.sdk:platech-taptopay-react-native-release:1.0.2') {
+        exclude group: 'com.google.ai.edge.litert', module: 'litert-support'
+    }
+}
